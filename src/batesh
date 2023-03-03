@@ -1,0 +1,145 @@
+functions=$(compgen -A function)
+
+__batesh_success=0
+__batesh_failure=1
+__batesh_running_test=""
+__batesh_failed_tests=0
+__batesh_continue_on_failure=0
+
+function __batesh_test_failed {
+    name="$1"
+    assertValue="$2"
+
+    callFunc=$(caller 1)
+    filename=$(echo "$callFunc" | cut -d " " -f 3)
+    lineno=$(echo "$callFunc" | cut -d " " -f 1)
+
+    echo "===================="
+    echo "FAILURE: in ${__batesh_running_test}"
+    echo "--------------------"
+    echo "${filename}:${lineno}: ${name} ${assertValue}"
+    echo "===================="
+
+    exit $__batesh_failure
+}
+
+function assertEquals {
+    if [ $1 != $2 ]; then
+        __batesh_test_failed "assertEquals" "$1 $2"
+    fi
+}
+
+function assertNotEquals {
+    if [ $1 == $2 ]; then
+        __batesh_test_failed "assertNotEquals" "$1 $2"
+    fi
+}
+
+function __batesh_setupTestStub {
+    return 0
+}
+
+function __batesh_teardownTestStub {
+    return 0
+}
+
+function __batesh_run_test {
+    local test="$1"
+    local setup="$2"
+    local teardown="$3"
+    __batesh_running_test="${test}"
+
+    $setup
+    $test
+    $teardown
+}
+
+function __batesh_print_test_failure {
+    local output="$1"
+
+    echo "X"
+    echo "$output"
+}
+
+function __batesh_run_tests {
+    local tests="$1"
+    local setup="$2"
+    local teardown="$3"
+    local ranTests=0
+
+    for test in ${tests}; do
+        output=$(__batesh_run_test "${test}" "${setup}" "${teardown}")
+        result=$?
+        ranTests=$((ranTests + 1))
+
+        if [ $result -eq $__batesh_success ]; then
+            echo -n "."
+        elif [ $result -eq $__batesh_failure ]; then
+            __batesh_print_test_failure "${output}"
+            __batesh_failed_tests=$((__batesh_failed_tests + 1))
+
+            if [ $__batesh_continue_on_failure -eq 0 ]; then
+                break
+            fi
+        fi
+    done
+    return $ranTests
+}
+
+function __batesh_collect_and_run_tests {
+    local functions="$1"
+    local setup=__batesh_setupTestStub
+    local teardown=__batesh_teardownTestStub
+    local testSuite=""
+    local totalTests=0
+
+    for func in $functions; do
+        if [ $func == "setupTest" ]; then
+            setup="${func}"
+        elif [ $func == "teardownTest" ]; then
+            teardown="${func}"
+        elif [[ $func = \test_* ]]; then
+            testSuite="${testSuite:+${testSuite} }${func}"
+            totalTests=$((totalTests + 1))
+        fi
+    done
+
+    start=$(date +%s)
+    __batesh_run_tests "${testSuite}" "${setup}" "${teardown}"
+    testsRan=$?
+    end=$(date +%s)
+    timeSpent=$((end - start))
+
+    echo ""
+    echo "--------------------"
+    echo "Ran ${testsRan} of ${totalTests} tests in ${timeSpent} seconds"
+    echo "${__batesh_failed_tests} tests failed"
+
+    [ $__batesh_failed_tests -eq 0 ] || exit 1
+}
+
+function usage {
+    echo "Usage: $0 [OPTIONS]"
+    echo "Options:"
+    echo "  -c,--continue   keep running the rest of the tests on test failures"
+    echo "  -h,--help       Print this help message and exit"
+}
+
+while [ $# -ge 1 ]; do
+    case "$1" in
+        -c | --continue)
+            __batesh_continue_on_failure=1
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+__batesh_collect_and_run_tests "${functions}"
